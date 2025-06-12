@@ -1,3 +1,4 @@
+#{"complianceJob.complianceJobName":"Consultative hardening Job"}
 import xlwt
 import datetime
 from pymongo import MongoClient
@@ -17,31 +18,35 @@ def transform_json(original_json, fields_to_keep):
     except Exception as e:
         print(f"An error occurred while transforming the JSON: {e}")
         return {}
-def transformDiffConfig(data):
-    if isinstance(data, dict):
-        transformed_node = {}
-        if "config_line" in data:
-            transformed_node["cl"] = data["config_line"]
-        if "children" in data:            
-            # The recursive call for the list handles all its elements
-            transformed_children = transformDiffConfig(data["children"])
-            if len(transformed_children) > 0:
-                # Extend the current node's children with the transformed children
-                transformed_node["ch"] = []
-                transformed_node["ch"].extend(transformed_children)
-        return transformed_node
-    elif isinstance(data, list):
-        transformed_list = []
-        # Iterate through each item in the list
-        for item in data:
-            processed_item = transformDiffConfig(item)
-            transformed_list.append(processed_item)
-        return transformed_list
-    else:
-        print(f"Warning: Unexpected data type encountered: {type(data)} with value {data}")
-        return data # Or {} if you want to discard it
     
-def getBlockExecutions():
+def strDiffConfig(data, indent_level=0):
+    output_lines = []
+    indent_prefix = " " * (indent_level * 2) # 2 spaces per indent level
+    if isinstance(data, dict):
+        # If the input is a dictionary (representing a config node)
+        if "config_line" in data:
+            if len (data["children"]) ==0 and (data["severity"]) != "info":
+
+                    output_lines.append(f"{indent_prefix}{data['config_line']}")
+            elif len (data["children"]) > 0:
+                output_lines.append(f"{indent_prefix}{data['config_line']}")
+        # Recursively process the 'children' list if it exists and is a list
+        if "children" in data and isinstance(data["children"], list):
+            # Call recursively for children, increasing the indent level
+            transformed_children_lines = strDiffConfig(data["children"], indent_level + 1)
+            # Extend the current node's output with the transformed children lines
+            output_lines.extend(transformed_children_lines)
+
+    elif isinstance(data, list):
+        # If the input is a list (representing a collection of config nodes)
+        for item in data:
+            processed_item_lines = strDiffConfig(item, indent_level)
+            output_lines.extend(processed_item_lines)
+    else:
+        output_lines.append(f"{indent_prefix}Unexpected Data: {data}")
+
+    return output_lines     
+def getBlockExecutions(jobName):
     username = "admin"
     password = "Chan5eAfter!n!t"
     cluster_address = "10.150.150.235:27017"
@@ -55,27 +60,34 @@ def getBlockExecutions():
 
         db = client[database_name]
         collection = db[collection_name]
+        executionCollection=db["compliance_executions"]
+        jobExecution=executionCollection.find_one({"complianceJob.complianceJobName":jobName})#.sort({"updatedAt":-1})
+        print(jobExecution["_id"])
+        documents = list(collection.find({"executionId":str (jobExecution["_id"])}))  # Fetch all documents
+        fields_to_keep = ["deviceIdentifier", "blockName", "deviceConfigBlocks", "complianceStatus", "blockConfig"]
 
-        documents = list(collection.find())  # Fetch all documents
-        fields_to_keep = ["deviceIdentifier", "blockName", "deviceConfigBlocks", "complianceStatus"]
         workbook = xlwt.Workbook()
 
         # === Sheet: Compliance Details ===
         detailsSheet = workbook.add_sheet("Compliance Details")
-        headers = ["Device Identifier", "Block Name", "Compliance Status", "Block Config"]
+        headers = ["","Device Identifier", "Block Name", "Compliance Status", "Block Config"]
         for col, header in enumerate(headers):
-            detailsSheet.write(0, col, header)
+            detailsSheet.write(1, col, header)
 
-        for row_index, doc in enumerate(documents, start=1):
+        for row_index, doc in enumerate(documents, start=2):
             transformed = transform_json(doc, fields_to_keep)
             detailsSheet.write(row_index, 1, transformed["deviceIdentifier"])
             detailsSheet.write(row_index, 2, transformed["blockName"])
             detailsSheet.write(row_index, 3, transformed["complianceStatus"])
             if(len(transformed["deviceConfigBlocks"]) > 0):
                 deviceConfigBlock=transformed["deviceConfigBlocks"][0]
-                diffConfigs=(transformDiffConfig(deviceConfigBlock["diff_config"]))
-                print(diffConfigs)
-                detailsSheet.write(row_index, 4, json.dumps(diffConfigs))
+                if (deviceConfigBlock["deviceConfig"]) == "" and deviceConfigBlock["complianceStatus"] !="info":
+                    detailsSheet.write(row_index, 4, transformed["blockConfig"])
+                else:
+                    strdiffConfigs=strDiffConfig(deviceConfigBlock["diff_config"])
+                    diffConfigs= "\015".join(strdiffConfigs)
+                    #print(transformed["deviceIdentifier"],transformed["blockName"],transformed["complianceStatus"],strdiffConfigs)
+                    detailsSheet.write(row_index, 4, diffConfigs)
 
         # === Non-compliant device grouping by rule ===
         rule_to_devices = {}
@@ -92,7 +104,7 @@ def getBlockExecutions():
             sheet = workbook.add_sheet(sheet_name)
 
             # Header
-            sheet.write(0, 0, "Rule name")
+            sheet.write(1, 0, "Rule name")
             sheet.write(0, 1, "Device Identifier")
 
             for idx, device in enumerate(devices, start=1):
@@ -110,4 +122,5 @@ def getBlockExecutions():
         print("Connection to MongoDB closed.")
 
 if __name__ == "__main__":
-    getBlockExecutions()
+    userInput=input("Please Enter Job name:")
+    getBlockExecutions(userInput)
