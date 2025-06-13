@@ -26,7 +26,6 @@ def strDiffConfig(data, indent_level=0):
         # If the input is a dictionary (representing a config node)
         if "config_line" in data:
             if len (data["children"]) ==0 and (data["severity"]) != "info":
-
                     output_lines.append(f"{indent_prefix}{data['config_line']}")
             elif len (data["children"]) > 0:
                 output_lines.append(f"{indent_prefix}{data['config_line']}")
@@ -57,7 +56,6 @@ def getBlockExecutions(jobName):
     try:
         client = MongoClient(connection_string)
         print("Connected to MongoDB successfully!")
-
         db = client[database_name]
         collection = db[collection_name]
         executionCollection=db["compliance_executions"]
@@ -65,53 +63,122 @@ def getBlockExecutions(jobName):
         print(jobExecution["_id"])
         documents = list(collection.find({"executionId":str (jobExecution["_id"])}))  # Fetch all documents
         fields_to_keep = ["deviceIdentifier", "blockName", "deviceConfigBlocks", "complianceStatus", "blockConfig"]
-
+        
         workbook = xlwt.Workbook()
+        # AK Modified Sheet: Compliance Summary 
+        summarySheet = workbook.add_sheet("Compliance Summary")
+        summaryHeaders = ["","Block Name","Number of devices in compliance", "Number of devices in Violation"]
+        for summaryCol, summaryHeader in enumerate(summaryHeaders):
+            summarySheet.write(1, summaryCol, summaryHeader)
+        summaryMetrics={}
+        for summaryRowIndex, summaryDoc in enumerate(documents, start=2):
+            transformed = transform_json(summaryDoc, fields_to_keep)
+            sheet_name = sanitize_sheet_name(transformed["blockName"])
 
-        # === Sheet: Compliance Details ===
-        detailsSheet = workbook.add_sheet("Compliance Details")
-        headers = ["","Device Identifier", "Block Name", "Compliance Status", "Block Config"]
-        for col, header in enumerate(headers):
-            detailsSheet.write(1, col, header)
-
-        for row_index, doc in enumerate(documents, start=2):
-            transformed = transform_json(doc, fields_to_keep)
-            detailsSheet.write(row_index, 1, transformed["deviceIdentifier"])
-            detailsSheet.write(row_index, 2, transformed["blockName"])
-            detailsSheet.write(row_index, 3, transformed["complianceStatus"])
+            if transformed["blockName"] in summaryMetrics:
+                metricsObject= summaryMetrics [transformed["blockName"]]
+                sheet=workbook.get_sheet(sheet_name)
+            else: 
+                summaryMetrics[transformed["blockName"]]={"complianceDevicesCount": 0,"nonComplianceDevicesCount": 0}
+                metricsObject= summaryMetrics [transformed["blockName"]]
+                
+                sheet = workbook.add_sheet(sheet_name)
+                #print(sheet_name)
+                # Header
+                sheet.write(1, 1, "Rule name")
+                sheet.write(1, 2, "Severity")
+                sheet.write(1, 3, "Device Identifier")
+                sheet.write(1, 4, "Missing Configurations")
+                # Add column
+                sheet.write(2, 1, transformed["blockName"])
+                blockRowIndex = 2
+            if transformed["complianceStatus"] !="compliant":
+                metricsObject ["nonComplianceDevicesCount"] =+1
+            else:
+                metricsObject ["complianceDevicesCount"] =+1
             if(len(transformed["deviceConfigBlocks"]) > 0):
                 deviceConfigBlock=transformed["deviceConfigBlocks"][0]
                 if (deviceConfigBlock["deviceConfig"]) == "" and deviceConfigBlock["complianceStatus"] !="info":
-                    detailsSheet.write(row_index, 4, transformed["blockConfig"])
+                    sheet.write(summaryRowIndex, 4, transformed["blockConfig"])
                 else:
                     strdiffConfigs=strDiffConfig(deviceConfigBlock["diff_config"])
                     diffConfigs= "\015".join(strdiffConfigs)
-                    #print(transformed["deviceIdentifier"],transformed["blockName"],transformed["complianceStatus"],strdiffConfigs)
-                    detailsSheet.write(row_index, 4, diffConfigs)
+                    sheet.write(summaryRowIndex, 4, diffConfigs)
+
+        for summaryRowIndex, blockName in enumerate (summaryMetrics, start=2):
+            summarySheet.write(summaryRowIndex, 1, blockName)
+            summarySheet.write(summaryRowIndex, 2, summaryMetrics[blockName]["complianceDevicesCount"])
+            summarySheet.write(summaryRowIndex, 3, summaryMetrics[blockName]["nonComplianceDevicesCount"])
+        #Eo AK-Mobified
+        
+        # === Sheet: Compliance Details ===
+    #    detailsSheet = workbook.add_sheet("Compliance Details")
+    #    headers = ["","Device Identifier", "Block Name", "Compliance Status", "Missing configuration"]
+    #    for col, header in enumerate(headers):
+    #        detailsSheet.write(1, col, header)
+    #    for row_index, doc in enumerate(documents, start=2):
+    #        transformed = transform_json(doc, fields_to_keep)
+    #        detailsSheet.write(row_index, 1, transformed["deviceIdentifier"])
+    #        detailsSheet.write(row_index, 2, transformed["blockName"])
+    #        if transformed["blockName"] in summaryMetrics:
+    #            metricsObject= summaryMetrics [transformed["blockName"]]
+    #        else: 
+    #            summaryMetrics[transformed["blockName"]]={"complianceDevicesCount": 0,"nonComplianceDevicesCount": 0}
+    #            metricsObject= summaryMetrics [transformed["blockName"]]
+    #        if transformed["complianceStatus"] !="compliant":
+    #            metricsObject ["nonComplianceDevicesCount"] =+1
+    #        else:
+    #            metricsObject ["complianceDevicesCount"] =+1
+    #        detailsSheet.write(row_index, 3, transformed["complianceStatus"])
+    #        if(len(transformed["deviceConfigBlocks"]) > 0):
+    #            deviceConfigBlock=transformed["deviceConfigBlocks"][0]
+    #            if (deviceConfigBlock["deviceConfig"]) == "" and deviceConfigBlock["complianceStatus"] !="info":
+    #                detailsSheet.write(row_index, 4, transformed["blockConfig"])
+    #            else:
+    #                strdiffConfigs=strDiffConfig(deviceConfigBlock["diff_config"])
+    #                diffConfigs= "\015".join(strdiffConfigs)
+    #                #print(transformed["deviceIdentifier"],transformed["blockName"],transformed["complianceStatus"],strdiffConfigs)
+    #                detailsSheet.write(row_index, 4, diffConfigs)
+    #        #print (summaryMetrics)
 
         # === Non-compliant device grouping by rule ===
-        rule_to_devices = {}
-        for doc in documents:
-            status = doc.get("complianceStatus", "").lower()
-            if status != "compliant":
-                rule = doc.get("blockName", "Unknown Rule")
-                device = doc.get("deviceIdentifier", "Unknown Device")
-                rule_to_devices.setdefault(rule, []).append(device)
+    #    rule_to_devices = {}
+    #    for doc in documents:
+    #        status = doc.get("complianceStatus", "").lower()
+    #        if status != "compliant":
+    #            rule = doc.get("blockName", "Unknown Rule")
+    #            device = doc.get("deviceIdentifier", "Unknown Device")
+    #            rule_to_devices.setdefault(rule, []).append(device)
 
         # Create one sheet per rule with list of devices
-        for rule_name, devices in rule_to_devices.items():
-            sheet_name = sanitize_sheet_name(rule_name)
-            sheet = workbook.add_sheet(sheet_name)
-
-            # Header
-            sheet.write(1, 0, "Rule name")
-            sheet.write(0, 1, "Device Identifier")
-
-            for idx, device in enumerate(devices, start=1):
-                sheet.write(idx, 1, device)
+    #    for rule_name, devices in rule_to_devices.items():
+    #        sheet_name = sanitize_sheet_name(rule_name)
+    #        sheet = workbook.add_sheet(sheet_name)
+#
+    #        # Header
+    #        sheet.write(1, 1, "Rule name")
+    #        sheet.write(1, 2, "Severity")
+    #        sheet.write(1, 3, "Device Identifier")
+    #        sheet.write(1, 4, "Missing Configurations")
+    #        sheet.write(2, 1, rule_name)
+    #        for idx, device in enumerate(devices, start=2):
+    #            sheet.write(idx, 3, device)
+    #        #AK Modified
+    #        for ruleSheetIndex, ruleDoc in enumerate(documents, start=2):
+    #            ruleTransformed = transform_json(ruleDoc, fields_to_keep)
+    #            if(len(ruleTransformed["deviceConfigBlocks"]) > 0):
+    #                deviceConfigBlock=ruleTransformed["deviceConfigBlocks"][0]
+    #                if (deviceConfigBlock["deviceConfig"]) == "" and deviceConfigBlock["complianceStatus"] !="info":
+    #                    sheet.write(ruleSheetIndex, 4, ruleTransformed["blockConfig"])
+    #                else:
+    #                    strdiffConfigs=strDiffConfig(deviceConfigBlock["diff_config"])
+    #                    diffConfigs= "\015".join(strdiffConfigs)
+    #                    #print(ruleTransformed["deviceIdentifier"],ruleTransformed["blockName"],ruleTransformed["complianceStatus"],strdiffConfigs)
+    #                    sheet.write(ruleSheetIndex, 4, diffConfigs)
+        #Eo AK Modified
 
         # Save workbook
-        filename = f"BPAReport_{dateNow.strftime('%Y%m%d_%H%M%S')}.xls"
+        filename = f"BPAReport_{dateNow.strftime('%Y%m%d_%H%M%S')}_{userInput}.xls"
         workbook.save(filename)
         print(f"Report saved as {filename}")
 
