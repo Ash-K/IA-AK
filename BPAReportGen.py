@@ -7,44 +7,46 @@ import re
 
 dateNow = datetime.datetime.now()
 
-def sanitize_sheet_name(name):
+def sanitizeSheetName(name):
     # Excel sheet names must be <= 31 characters, no special characters like : \ / ? * [ ]
     name = re.sub(r'[\\/*?:[\]]', '', name)
     return name[:31]
 
-def transform_json(original_json, fields_to_keep):
+def transformJSON(originalJSON, fieldsToKeep):
     try:
-        return {field: original_json.get(field, "FIELD_NOT_FOUND") for field in fields_to_keep}
+        return {field: originalJSON.get(field, "FIELD_NOT_FOUND") for field in fieldsToKeep}
     except Exception as e:
         print(f"An error occurred while transforming the JSON: {e}")
         return {}
-    
+
+#Extract configuration
 def strDiffConfig(data, indent_level=0):
-    output_lines = []
-    indent_prefix = " " * (indent_level * 2) # 2 spaces per indent level
+    outputLines = []
+    indentPrefix = " " * (indent_level * 2) # 2 spaces per indent level
     if isinstance(data, dict):
         # If the input is a dictionary (representing a config node)
         if "config_line" in data:
             if len (data["children"]) ==0 and (data["severity"]) != "info":
-                    output_lines.append(f"{indent_prefix}{data['config_line']}")
+                    outputLines.append(f"{indentPrefix}{data['config_line']}")
             elif len (data["children"]) > 0:
-                output_lines.append(f"{indent_prefix}{data['config_line']}")
+                outputLines.append(f"{indentPrefix}{data['config_line']}")
         # Recursively process the 'children' list if it exists and is a list
         if "children" in data and isinstance(data["children"], list):
             # Call recursively for children, increasing the indent level
             transformed_children_lines = strDiffConfig(data["children"], indent_level + 1)
             # Extend the current node's output with the transformed children lines
-            output_lines.extend(transformed_children_lines)
+            outputLines.extend(transformed_children_lines)
 
     elif isinstance(data, list):
         # If the input is a list (representing a collection of config nodes)
         for item in data:
             processed_item_lines = strDiffConfig(item, indent_level)
-            output_lines.extend(processed_item_lines)
+            outputLines.extend(processed_item_lines)
     else:
-        output_lines.append(f"{indent_prefix}Unexpected Data: {data}")
+        outputLines.append(f"{indentPrefix}Unexpected Data: {data}")
 
-    return output_lines     
+    return outputLines  
+# Variables required to Conenct to MongoDB   
 def getBlockExecutions(jobName):
     username = "admin"
     password = "Chan5eAfter!n!t"
@@ -53,6 +55,7 @@ def getBlockExecutions(jobName):
     collection_name = "compliance_block_executions"
     connection_string = f"mongodb://{username}:{password}@{cluster_address}"
 
+# Conencting to MondoDB 
     try:
         client = MongoClient(connection_string)
         print("Connected to MongoDB successfully!")
@@ -62,9 +65,10 @@ def getBlockExecutions(jobName):
         jobExecution=executionCollection.find_one({"complianceJob.complianceJobName":jobName})#.sort({"updatedAt":-1})
         print(jobExecution["_id"])
         documents = list(collection.find({"executionId":str (jobExecution["_id"])}))  # Fetch all documents
-        fields_to_keep = ["deviceIdentifier", "blockName", "deviceConfigBlocks", "complianceStatus", "blockConfig"]
+        fieldsToKeep = ["deviceIdentifier", "blockName", "deviceConfigBlocks", "complianceStatus", "blockConfig"]
         
         workbook = xlwt.Workbook()
+
         # AK Modified Sheet: Compliance Summary 
         summarySheet = workbook.add_sheet("Compliance Summary")
         summaryHeaders = ["","Block Name","Number of devices in compliance", "Number of devices in Violation"]
@@ -72,9 +76,8 @@ def getBlockExecutions(jobName):
             summarySheet.write(1, summaryCol, summaryHeader)
         summaryMetrics={}
         for summaryRowIndex, summaryDoc in enumerate(documents, start=2):
-            transformed = transform_json(summaryDoc, fields_to_keep)
-            sheet_name = sanitize_sheet_name(transformed["blockName"])
-
+            transformed = transformJSON(summaryDoc, fieldsToKeep)
+            sheet_name = sanitizeSheetName(transformed["blockName"])
             if transformed["blockName"] in summaryMetrics:
                 metricsObject= summaryMetrics [transformed["blockName"]]
                 sheet=workbook.get_sheet(sheet_name)
@@ -82,8 +85,8 @@ def getBlockExecutions(jobName):
                 summaryMetrics[transformed["blockName"]]={"complianceDevicesCount": 0,"nonComplianceDevicesCount": 0}
                 metricsObject= summaryMetrics [transformed["blockName"]]
                 
-                sheet = workbook.add_sheet(sheet_name)
-                #print(sheet_name)
+                sheet = workbook.add_sheet(sheet_name, cell_overwrite_ok=True)
+                #print("Adding :", sheet_name)
                 # Header
                 sheet.write(1, 1, "Rule name")
                 sheet.write(1, 2, "Severity")
@@ -91,19 +94,27 @@ def getBlockExecutions(jobName):
                 sheet.write(1, 4, "Missing Configurations")
                 # Add column
                 sheet.write(2, 1, transformed["blockName"])
-                blockRowIndex = 2
+
             if transformed["complianceStatus"] !="compliant":
                 metricsObject ["nonComplianceDevicesCount"] =+1
             else:
                 metricsObject ["complianceDevicesCount"] =+1
+            blockRowIndex = metricsObject ["nonComplianceDevicesCount"] + metricsObject ["complianceDevicesCount"] + 1
             if(len(transformed["deviceConfigBlocks"]) > 0):
                 deviceConfigBlock=transformed["deviceConfigBlocks"][0]
                 if (deviceConfigBlock["deviceConfig"]) == "" and deviceConfigBlock["complianceStatus"] !="info":
-                    sheet.write(summaryRowIndex, 4, transformed["blockConfig"])
+                    sheet.write(blockRowIndex, 2, deviceConfigBlock["complianceStatus"])
+                    sheet.write(blockRowIndex, 3, transformed["deviceIdentifier"])
+                    sheet.write(blockRowIndex, 4, transformed["blockConfig"])
                 else:
                     strdiffConfigs=strDiffConfig(deviceConfigBlock["diff_config"])
                     diffConfigs= "\015".join(strdiffConfigs)
-                    sheet.write(summaryRowIndex, 4, diffConfigs)
+                    if diffConfigs != "":
+
+                        #print (blockRowIndex, transformed["blockName"], diffConfigs)
+                        sheet.write(blockRowIndex, 2, deviceConfigBlock["complianceStatus"])
+                        sheet.write(blockRowIndex, 3, transformed["deviceIdentifier"])
+                        sheet.write(blockRowIndex, 4, diffConfigs)
 
         for summaryRowIndex, blockName in enumerate (summaryMetrics, start=2):
             summarySheet.write(summaryRowIndex, 1, blockName)
@@ -117,7 +128,7 @@ def getBlockExecutions(jobName):
     #    for col, header in enumerate(headers):
     #        detailsSheet.write(1, col, header)
     #    for row_index, doc in enumerate(documents, start=2):
-    #        transformed = transform_json(doc, fields_to_keep)
+    #        transformed = transformJSON(doc, fieldsToKeep)
     #        detailsSheet.write(row_index, 1, transformed["deviceIdentifier"])
     #        detailsSheet.write(row_index, 2, transformed["blockName"])
     #        if transformed["blockName"] in summaryMetrics:
@@ -152,7 +163,7 @@ def getBlockExecutions(jobName):
 
         # Create one sheet per rule with list of devices
     #    for rule_name, devices in rule_to_devices.items():
-    #        sheet_name = sanitize_sheet_name(rule_name)
+    #        sheet_name = sanitizeSheetName(rule_name)
     #        sheet = workbook.add_sheet(sheet_name)
 #
     #        # Header
@@ -165,7 +176,7 @@ def getBlockExecutions(jobName):
     #            sheet.write(idx, 3, device)
     #        #AK Modified
     #        for ruleSheetIndex, ruleDoc in enumerate(documents, start=2):
-    #            ruleTransformed = transform_json(ruleDoc, fields_to_keep)
+    #            ruleTransformed = transformJSON(ruleDoc, fieldsToKeep)
     #            if(len(ruleTransformed["deviceConfigBlocks"]) > 0):
     #                deviceConfigBlock=ruleTransformed["deviceConfigBlocks"][0]
     #                if (deviceConfigBlock["deviceConfig"]) == "" and deviceConfigBlock["complianceStatus"] !="info":
