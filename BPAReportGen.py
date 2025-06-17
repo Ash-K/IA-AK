@@ -40,20 +40,6 @@ def strDiffConfig(data, indentLevel=0):
                     mLine = f"\015{indentPrefix}{data['config_line']}"
                     outputLines.append((mLine, fontDefault))
 
-            #elif len (data["children"]) > 0 and (data["severity"]) != "info":
-               # mLine = f"\015{indentPrefix}{data['config_line']}"
-                #outputLines.append((mLine, fontDefault))
-#                for item in data["children"]:
-#                    if len (item["violations"]) > 0 and "<<MissingConfig>>" in item["violations"] :
-#                        cLine = f"\015{indentPrefix}{item['config_line']}"
-#                        outputLines.append((cLine,fontBoldRed))
-#                    if len (item["violations"]) > 0 and "<<AdditionalConfig>>" in item["violations"] :
-#                        aLine = f"\015{indentPrefix}{item['config_line']}"
-#                        outputLines.append((aLine,fontGreen))
-#                    else: 
-#                        mLine = f"\015{indentPrefix}{data['config_line']}"
-#                        outputLines.append((mLine, fontDefault))
-
         # Recursively process the 'children' list if it exists and is a list
         if "children" in data and isinstance(data["children"], list):
             # Call recursively for children, increasing the indent level
@@ -69,7 +55,6 @@ def strDiffConfig(data, indentLevel=0):
     else:
         outputLines.append(f"{indentPrefix}Unexpected Data: {data}")
     return outputLines  
-
 
 # Variables required to Conenct to MongoDB   
 def fetchMongoDB(jobName):
